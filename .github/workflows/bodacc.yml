@@ -2,7 +2,7 @@ name: Veille BODACC quotidienne
 
 on:
   schedule:
-    - cron: '0 9 * * 1-5'   # 9h UTC = 10h Paris, du lundi au vendredi
+    - cron: '0 22 * * 1-5'   # 9h UTC = 10h Paris, du lundi au vendredi
   workflow_dispatch:          # Bouton pour lancer manuellement
 
 jobs:
