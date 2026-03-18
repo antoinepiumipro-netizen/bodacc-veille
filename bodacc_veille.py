@@ -36,25 +36,48 @@ def fetch_records(famille):
         print(f"Erreur API pour {famille} : {e}")
         return []
 
+def parse_montant(montant_str):
+    """
+    Convertit une chaîne de montant en entier, en gérant :
+    - les espaces/apostrophes/nbsp comme séparateurs de milliers : "173 954" -> 173954
+    - la virgule comme séparateur décimal : "173954,00" -> 173954
+    - le point comme séparateur décimal : "173954.00" -> 173954
+    - le point comme séparateur de milliers (style anglo) : "1.500.000" -> 1500000
+    """
+    s = montant_str.strip()
+
+    # Cas : le point est séparateur de milliers (ex: 1.500.000 ou 1.500)
+    # = plusieurs points, ou point suivi de 3 chiffres puis fin/virgule
+    if re.search(r'\.\d{3}(\.|,|$)', s):
+        s = s.replace('.', '').replace(',', '')
+    else:
+        # Sinon virgule ou point = décimale → on tronque
+        s = re.split(r'[,\.]', s)[0]
+
+    # Supprime tous les séparateurs de milliers restants (espaces, nbsp, apostrophes)
+    s = re.sub(r'[\s\u202f\u00a0\']', '', s)
+
+    try:
+        val = int(s)
+        return val if val >= 1000 else None
+    except ValueError:
+        return None
+
 def extraire_montant_texte(texte):
     """Extrait un montant en € depuis un texte libre."""
     patterns = [
-        r"prix\s+de\s+([\d\s\u202f\.]+)\s*[€euros]",
-        r"moyennant\s+(?:le\s+prix\s+de\s+)?([\d\s\u202f\.]+)\s*[€euros]",
-        r"capital\s+(?:social\s+)?(?:de\s+|fix[eé]\s+[àa]\s+|port[eé]\s+[àa]\s+)?([\d\s\u202f\.]+)\s*[€euros]",
-        r"apport[s]?\s+(?:de\s+)?([\d\s\u202f\.]+)\s*[€euros]",
-        r"montant\s+(?:de\s+)?([\d\s\u202f\.]+)\s*[€euros]",
+        r"prix\s+de\s+([\d\s\u202f\u00a0\'\.,]+?)\s*(?:EUR|€|euros)",
+        r"moyennant\s+(?:le\s+prix\s+de\s+)?([\d\s\u202f\u00a0\'\.,]+?)\s*(?:EUR|€|euros)",
+        r"capital\s+(?:social\s+)?(?:de\s+|fix[eé]\s+[àa]\s+|port[eé]\s+[àa]\s+)?([\d\s\u202f\u00a0\'\.,]+?)\s*(?:EUR|€|euros)",
+        r"apport[s]?\s+(?:de\s+)?([\d\s\u202f\u00a0\'\.,]+?)\s*(?:EUR|€|euros)",
+        r"montant\s+(?:de\s+)?([\d\s\u202f\u00a0\'\.,]+?)\s*(?:EUR|€|euros)",
     ]
     for pattern in patterns:
         match = re.search(pattern, texte, re.IGNORECASE)
         if match:
-            try:
-                montant_str = re.sub(r"[\s\u202f\.]", "", match.group(1))
-                val = int(montant_str)
-                if val > 1000:  # ignore les montants absurdes < 1000€
-                    return val
-            except ValueError:
-                continue
+            val = parse_montant(match.group(1))
+            if val:
+                return val
     return None
 
 def extraire_montant_acte(acte_str):
