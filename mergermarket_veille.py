@@ -40,7 +40,7 @@ def get_mergermarket_emails(service):
     """Récupère les emails MergerMarket non lus."""
     results = service.users().messages().list(
         userId="me",
-        q='is:unread',
+        q='from:mergermarket.com is:unread',
         maxResults=20
     ).execute()
     return results.get("messages", [])
