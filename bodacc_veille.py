@@ -10,7 +10,7 @@ from datetime import date
 # ── CONFIG ──────────────────────────────────────────────
 SEUIL = 3_000_000
 EMAIL_FROM  = "u4356824811@gmail.com"
-EMAIL_TO    = "u4356824811@gmail.com"
+EMAIL_TO    = "antoine.piumi@lazard.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT   = 587
 SMTP_PASS   = os.environ["SMTP_PASS"]
