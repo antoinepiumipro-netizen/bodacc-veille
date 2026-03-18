@@ -25,16 +25,21 @@ BASE_URL = (
 )
 
 def fetch_records(famille):
+    import time
     url = BASE_URL + f"&refine.familleavis={famille}"
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        print(f"  → {data.get('nhits', 0)} annonces trouvées pour '{famille}' aujourd'hui")
-        return data.get("records", [])
-    except Exception as e:
-        print(f"Erreur API pour {famille} : {e}")
-        return []
+    for tentative in range(3):
+        try:
+            response = requests.get(url, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            print(f"  -> {data.get('nhits', 0)} annonces trouvees pour '{famille}' aujourd'hui")
+            return data.get("records", [])
+        except Exception as e:
+            print(f"  Tentative {tentative+1}/3 echouee pour '{famille}' : {e}")
+            if tentative < 2:
+                time.sleep(10)
+    print(f"  ECHEC : impossible de recuperer '{famille}' apres 3 tentatives.")
+    return []
 
 def parse_montant(montant_str):
     """
