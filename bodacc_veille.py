@@ -22,7 +22,7 @@ def build_url(famille):
         f"&refine.familleavis={famille}"
         "&rows=100"
         "&sort=dateparution"
-        f"&refine.dateparution={date.today().isoformat()}"
+        
     )
 
 def extraire_montant_cession(texte):
