@@ -1,0 +1,25 @@
+name: Veille MergerMarket
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Toutes les heures
+  workflow_dispatch:        # Bouton pour lancer manuellement
+
+jobs:
+  veille:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Installer les dépendances
+        run: pip install requests google-auth google-auth-httplib2 google-api-python-client
+      - name: Lancer la veille MergerMarket
+        run: python mergermarket_veille.py
+        env:
+          SMTP_PASS:            ${{ secrets.SMTP_PASS }}
+          ANTHROPIC_KEY:        ${{ secrets.ANTHROPIC_KEY }}
+          GMAIL_TOKEN:          ${{ secrets.GMAIL_TOKEN }}
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
