@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import date
 
 # ── CONFIG ──────────────────────────────────────────────
-SEUIL = 100_000
+SEUIL = 3_000_000
 EMAIL_FROM  = "u4356824811@gmail.com"
 EMAIL_TO    = "u4356824811@gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
