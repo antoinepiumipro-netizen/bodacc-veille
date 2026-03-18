@@ -157,7 +157,7 @@ def creer_excel(entreprises):
     # Filtre auto
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
 
-    path = "/mnt/user-data/outputs/prospection_MA_IDF.xlsx"
+    path = "prospection_MA_IDF.xlsx"
     wb.save(path)
     print(f"✅ Fichier généré : {path}")
     return path
