@@ -1,10 +1,10 @@
-name: SIREN Enrichi
+name: Recherche SIRENs GIFAS
 
 on:
   workflow_dispatch:
 
 jobs:
-  enrichissement:
+  recherche:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,10 +12,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install requests openpyxl
-      - run: python siren_enrichi_test.py
-        env:
-          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+      - run: python sirens_gifas.py
       - uses: actions/upload-artifact@v4
         with:
-          name: siren-enrichi-test
-          path: siren_enrichi_test.xlsx
+          name: sirens-gifas
+          path: sirens_gifas.xlsx
