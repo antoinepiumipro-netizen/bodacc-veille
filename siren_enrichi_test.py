@@ -9,19 +9,28 @@ from openpyxl.utils import get_column_letter
 ANTHROPIC_KEY = os.environ["ANTHROPIC_KEY"]
 BASE_URL = "https://recherche-entreprises.api.gouv.fr/search"
 
-# TEST : 10 premières entreprises
+# TEST : 10 premières entreprises — remplacer par la liste complète pour le vrai run
 ENTREPRISES = [
     "3DEUS DYNAMICS", "A-NSE", "AAS INDUSTRIES", "ABC", "AC DISMANTLING",
     "ACB", "ADB", "ADDEV MATERIALS AEROSPACE SAS", "AddUp", "ADHETEC",
+    "ADSS", "AEGIS PLATING", "AEQUS AEROSPACE FRANCE", "AERIADES",
+    "AERO NEGOCE INTERNATIONAL", "AEROCAMPUS AQUITAINE", "AEROCAST",
+    "AEROCENTRE", "AEROMETAL SAS", "AEROMETALS & ALLOYS",
 ]
+
+# ── Délais anti rate-limit ───────────────────────────────────────────
+DELAI_SIRENE   = 2   # secondes entre chaque appel Sirene
+DELAI_CLAUDE   = 3   # secondes entre chaque appel Claude
+ATTENTE_429    = 30  # secondes d'attente si rate limit 429
+# ────────────────────────────────────────────────────────────────────
 
 def chercher_siren(nom):
     for tentative in range(3):
         try:
             r = requests.get(BASE_URL, params={"q": nom, "per_page": 3}, timeout=15)
             if r.status_code == 429:
-                print(f"  Rate limit, attente 60s...")
-                time.sleep(60)
+                print(f"  Sirene 429, attente {ATTENTE_429}s...")
+                time.sleep(ATTENTE_429)
                 continue
             if r.status_code == 200:
                 data = r.json()
@@ -40,7 +49,8 @@ def chercher_siren(nom):
             return {"siren": "", "nom_trouve": "", "ville": "", "statut": f"Erreur: {str(e)[:40]}"}
     return {"siren": "", "nom_trouve": "", "ville": "", "statut": "Echec apres 3 tentatives"}
 
-def appel_claude_avec_retry(payload, timeout=30):
+def appel_claude(payload, timeout=60):
+    """Appel API Claude avec retry automatique si 429."""
     for tentative in range(3):
         try:
             r = requests.post(
@@ -54,8 +64,8 @@ def appel_claude_avec_retry(payload, timeout=30):
                 timeout=timeout,
             )
             if r.status_code == 429:
-                print(f"  Anthropic rate limit, attente 30s... (tentative {tentative+1})")
-                time.sleep(30)
+                print(f"  Claude 429, attente {ATTENTE_429}s... (tentative {tentative+1})")
+                time.sleep(ATTENTE_429)
                 continue
             r.raise_for_status()
             return r.json()
@@ -66,185 +76,146 @@ def appel_claude_avec_retry(payload, timeout=30):
     return None
 
 def verifier_faux_positif(nom_recherche, nom_trouve):
-    """Appel Claude SANS web search — juste vérifier si c'est la bonne entreprise."""
+    """Étape 2 : Claude sans web search — même entreprise ?"""
     prompt = f"""Est-ce que ces deux noms désignent la même entreprise ?
 Nom recherché : "{nom_recherche}"
-Nom trouvé : "{nom_trouve}"
+Nom trouvé dans Sirene : "{nom_trouve}"
 
 Réponds UNIQUEMENT en JSON :
 {{"faux_positif": true ou false, "raison": "explication en 1 phrase"}}"""
 
-    payload = {
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    for tentative in range(3):
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json=payload, timeout=30,
-            )
-            if r.status_code == 429:
-                print(f"  Anthropic 429, attente 30s... (tentative {tentative+1})")
-                time.sleep(30)
-                continue
-            r.raise_for_status()
-            texte = r.json()["content"][0]["text"].strip().strip("```json").strip("```").strip()
-            data = json.loads(texte)
-            return data.get("faux_positif", True), data.get("raison", "")
-        except Exception as e:
-            if tentative == 2:
-                return True, f"Erreur: {str(e)[:40]}"
-            time.sleep(5)
-    return True, "Echec apres 3 tentatives"
+    try:
+        res = appel_claude({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 200,
+            "messages": [{"role": "user", "content": prompt}],
+        })
+        texte = res["content"][0]["text"].strip().strip("```json").strip("```").strip()
+        data = json.loads(texte)
+        return data.get("faux_positif", True), data.get("raison", "")
+    except Exception as e:
+        return True, f"Erreur: {str(e)[:40]}"
 
-def enrichir_vrai_positif(nom, siren):
-    """Appel Claude AVEC web search — uniquement pour les vrais positifs."""
-    prompt = f"""Recherche des informations sur cette entreprise française :
+def chercher_description(nom, siren):
+    """Étape 3 : Claude avec web search — description 1 phrase + lien aéro."""
+    prompt = f"""Recherche cette entreprise française.
 Nom : "{nom}"
 SIREN : {siren}
 
 Réponds UNIQUEMENT en JSON :
 {{
-  "description_activite": "2-3 phrases sur l'activité",
-  "chiffre_affaires": "montant avec année ex: 45M€ (2023) ou null",
-  "ebitda": "montant avec année ou null",
-  "actionnariat": "famille X, fonds Y, groupe coté Z... ou null",
-  "derniere_actualite": "dernière actu pertinente (cession, acquisition, levée de fonds, croissance) avec date ou null"
+  "description": "1 phrase courte sur l'activité principale",
+  "lien_aero": true si activité liée à l'aéronautique/spatial/défense/aviation, false sinon
 }}"""
 
-    payload = {
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 1000,
-        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    for tentative in range(3):
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json=payload, timeout=60,
-            )
-            if r.status_code == 429:
-                print(f"  Anthropic 429, attente 30s... (tentative {tentative+1})")
-                time.sleep(30)
-                continue
-            r.raise_for_status()
-            texte = ""
-            for bloc in r.json()["content"]:
-                if bloc.get("type") == "text":
-                    texte += bloc.get("text", "")
-            texte = texte.strip().strip("```json").strip("```").strip()
-            return json.loads(texte)
-        except Exception as e:
-            if tentative == 2:
-                return {"description_activite": None, "chiffre_affaires": None,
-                        "ebitda": None, "actionnariat": None, "derniere_actualite": None}
-            time.sleep(5)
-    return {"description_activite": None, "chiffre_affaires": None,
-            "ebitda": None, "actionnariat": None, "derniere_actualite": None}
+    try:
+        res = appel_claude({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 300,
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+            "messages": [{"role": "user", "content": prompt}],
+        })
+        texte = ""
+        for bloc in res["content"]:
+            if bloc.get("type") == "text":
+                texte += bloc.get("text", "")
+        texte = texte.strip().strip("```json").strip("```").strip()
+        data = json.loads(texte)
+        return data.get("description", ""), data.get("lien_aero", True)
+    except Exception as e:
+        return "", True  # En cas d'erreur on garde par défaut
 
-def creer_excel(resultats):
+def creer_excel(vrais_positifs, faux_positifs):
+    """Génère un Excel avec 2 onglets."""
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Entreprises enrichies"
 
     HEADER_BG = "1F3864"
+    HEADER_FP  = "8B0000"
     thin = Side(style="thin", color="C0C0C0")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    headers = [
-        "Nom recherché", "SIREN", "Nom officiel", "Ville", "Faux positif",
-        "Raison fiabilité", "Description activité", "CA", "EBITDA",
-        "Actionnariat", "Dernière actualité"
-    ]
-    largeurs = [30, 12, 30, 20, 12, 35, 50, 18, 18, 35, 50]
-
-    for col, (h, w) in enumerate(zip(headers, largeurs), 1):
-        cell = ws.cell(row=1, column=col, value=h)
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
-        cell.fill = PatternFill("solid", start_color=HEADER_BG)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border
-        ws.column_dimensions[get_column_letter(col)].width = w
-    ws.row_dimensions[1].height = 30
-
-    for i, res in enumerate(resultats, 2):
-        bg = "EEF2F7" if i % 2 == 0 else "FFFFFF"
-        faux = res.get("faux_positif")
-        row_data = [
-            res["nom_recherche"],
-            res.get("siren", ""),
-            res.get("nom_trouve", ""),
-            res.get("ville", ""),
-            "OUI" if faux else ("NON" if faux is False else res.get("statut", "?")),
-            res.get("raison", ""),
-            res.get("description_activite", ""),
-            res.get("chiffre_affaires", ""),
-            res.get("ebitda", ""),
-            res.get("actionnariat", ""),
-            res.get("derniere_actualite", ""),
-        ]
-        for col, val in enumerate(row_data, 1):
-            cell = ws.cell(row=i, column=col, value=val)
-            cell.font = Font(name="Arial", size=9)
-            cell.fill = PatternFill("solid", start_color=bg)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    def ecrire_onglet(ws, lignes, couleur_header, headers, largeurs):
+        for col, (h, w) in enumerate(zip(headers, largeurs), 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+            cell.fill = PatternFill("solid", start_color=couleur_header)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = border
-            if col == 5:
-                if val == "OUI":
-                    cell.font = Font(name="Arial", size=9, color="CC0000", bold=True)
-                elif val == "NON":
-                    cell.font = Font(name="Arial", size=9, color="006600")
-        ws.row_dimensions[i].height = 70
+            ws.column_dimensions[get_column_letter(col)].width = w
+        ws.row_dimensions[1].height = 30
 
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+        for i, row_data in enumerate(lignes, 2):
+            bg = "EEF2F7" if i % 2 == 0 else "FFFFFF"
+            for col, val in enumerate(row_data, 1):
+                cell = ws.cell(row=i, column=col, value=val)
+                cell.font = Font(name="Arial", size=9)
+                cell.fill = PatternFill("solid", start_color=bg)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                cell.border = border
+            ws.row_dimensions[i].height = 50
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+
+    # Onglet 1 : Vrais positifs
+    ws1 = wb.active
+    ws1.title = "Vrais positifs"
+    ecrire_onglet(
+        ws1, vrais_positifs, HEADER_BG,
+        ["Nom GIFAS", "SIREN", "Nom officiel Sirene", "Ville", "Description"],
+        [30, 12, 35, 20, 60]
+    )
+
+    # Onglet 2 : Faux positifs
+    ws2 = wb.create_sheet("A vérifier manuellement")
+    ecrire_onglet(
+        ws2, faux_positifs, HEADER_FP,
+        ["Nom GIFAS", "SIREN trouvé", "Nom officiel Sirene", "Raison exclusion"],
+        [30, 12, 35, 60]
+    )
+
     wb.save("siren_enrichi_test.xlsx")
     print("Fichier genere : siren_enrichi_test.xlsx")
+    print(f"  Onglet 1 - Vrais positifs : {len(vrais_positifs)} entreprises")
+    print(f"  Onglet 2 - A verifier : {len(faux_positifs)} entreprises")
 
 if __name__ == "__main__":
-    resultats = []
+    vrais_positifs = []
+    faux_positifs  = []
     total = len(ENTREPRISES)
 
     for i, nom in enumerate(ENTREPRISES, 1):
         print(f"\n[{i}/{total}] {nom}")
-        res = {"nom_recherche": nom}
 
-        # Étape 1 : SIREN
+        # ── Étape 1 : Recherche SIREN ──────────────────────────────
         siren_res = chercher_siren(nom)
-        res.update(siren_res)
         print(f"  SIREN : {siren_res['statut']} → {siren_res.get('siren', '')} {siren_res.get('nom_trouve', '')}")
-        time.sleep(3)
+        time.sleep(DELAI_SIRENE)
 
         if siren_res["statut"] != "Trouve":
-            resultats.append(res)
+            faux_positifs.append([nom, "", "", f"SIREN non trouvé : {siren_res['statut']}"])
             continue
 
-        # Étape 2 : Vérification faux positif (sans web search)
-        time.sleep(3)  # pause anti-429 Anthropic
-        print(f"  Vérification faux positif...")
+        # ── Étape 2 : Vérification faux positif (sans web search) ──
+        time.sleep(DELAI_CLAUDE)
         faux_positif, raison = verifier_faux_positif(nom, siren_res["nom_trouve"])
-        res["faux_positif"] = faux_positif
-        res["raison"] = raison
-        print(f"  → Faux positif : {faux_positif} — {raison}")
+        print(f"  Faux positif : {faux_positif} — {raison}")
 
         if faux_positif:
-            print(f"  Faux positif détecté, pas d'enrichissement.")
-            resultats.append(res)
+            faux_positifs.append([nom, siren_res["siren"], siren_res["nom_trouve"], f"Nom différent : {raison}"])
             continue
 
-        # Étape 3 : Enrichissement web search (seulement vrais positifs)
-        print(f"  Enrichissement avec recherche web...")
-        enrichi = enrichir_vrai_positif(nom, siren_res["siren"])
-        res.update(enrichi)
-        print(f"  → CA : {enrichi.get('chiffre_affaires', 'N/A')}")
-        print(f"  → Actionnariat : {enrichi.get('actionnariat', 'N/A')}")
+        # ── Étape 3 : Description + vérification lien aéro (web search) ──
+        time.sleep(DELAI_CLAUDE)
+        description, lien_aero = chercher_description(nom, siren_res["siren"])
+        print(f"  Lien aéro : {lien_aero} — {description[:80]}")
 
-        resultats.append(res)
+        if not lien_aero:
+            faux_positifs.append([nom, siren_res["siren"], siren_res["nom_trouve"], f"Hors secteur aéro : {description}"])
+            continue
 
-    creer_excel(resultats)
-    print(f"\nTest terminé : {total} entreprises traitées.")
+        # ── Vrai positif confirmé ──────────────────────────────────
+        vrais_positifs.append([nom, siren_res["siren"], siren_res["nom_trouve"], siren_res["ville"], description])
+
+    creer_excel(vrais_positifs, faux_positifs)
+    print(f"\nTerminé : {len(vrais_positifs)} vrais positifs, {len(faux_positifs)} à vérifier.")
