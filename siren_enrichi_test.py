@@ -40,6 +40,31 @@ def chercher_siren(nom):
             return {"siren": "", "nom_trouve": "", "ville": "", "statut": f"Erreur: {str(e)[:40]}"}
     return {"siren": "", "nom_trouve": "", "ville": "", "statut": "Echec apres 3 tentatives"}
 
+def appel_claude_avec_retry(payload, timeout=30):
+    for tentative in range(3):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=timeout,
+            )
+            if r.status_code == 429:
+                print(f"  Anthropic rate limit, attente 30s... (tentative {tentative+1})")
+                time.sleep(30)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if tentative == 2:
+                raise
+            time.sleep(5)
+    return None
+
 def verifier_faux_positif(nom_recherche, nom_trouve):
     """Appel Claude SANS web search — juste vérifier si c'est la bonne entreprise."""
     prompt = f"""Est-ce que ces deux noms désignent la même entreprise ?
@@ -49,27 +74,31 @@ Nom trouvé : "{nom_trouve}"
 Réponds UNIQUEMENT en JSON :
 {{"faux_positif": true ou false, "raison": "explication en 1 phrase"}}"""
 
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        texte = r.json()["content"][0]["text"].strip().strip("```json").strip("```").strip()
-        data = json.loads(texte)
-        return data.get("faux_positif", True), data.get("raison", "")
-    except Exception as e:
-        return True, f"Erreur: {str(e)[:40]}"
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 200,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    for tentative in range(3):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json=payload, timeout=30,
+            )
+            if r.status_code == 429:
+                print(f"  Anthropic 429, attente 30s... (tentative {tentative+1})")
+                time.sleep(30)
+                continue
+            r.raise_for_status()
+            texte = r.json()["content"][0]["text"].strip().strip("```json").strip("```").strip()
+            data = json.loads(texte)
+            return data.get("faux_positif", True), data.get("raison", "")
+        except Exception as e:
+            if tentative == 2:
+                return True, f"Erreur: {str(e)[:40]}"
+            time.sleep(5)
+    return True, "Echec apres 3 tentatives"
 
 def enrichir_vrai_positif(nom, siren):
     """Appel Claude AVEC web search — uniquement pour les vrais positifs."""
@@ -86,32 +115,37 @@ Réponds UNIQUEMENT en JSON :
   "derniere_actualite": "dernière actu pertinente (cession, acquisition, levée de fonds, croissance) avec date ou null"
 }}"""
 
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1000,
-                "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=60,
-        )
-        r.raise_for_status()
-        texte = ""
-        for bloc in r.json()["content"]:
-            if bloc.get("type") == "text":
-                texte += bloc.get("text", "")
-        texte = texte.strip().strip("```json").strip("```").strip()
-        return json.loads(texte)
-    except Exception as e:
-        return {"description_activite": None, "chiffre_affaires": None,
-                "ebitda": None, "actionnariat": None, "derniere_actualite": None}
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 1000,
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    for tentative in range(3):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json=payload, timeout=60,
+            )
+            if r.status_code == 429:
+                print(f"  Anthropic 429, attente 30s... (tentative {tentative+1})")
+                time.sleep(30)
+                continue
+            r.raise_for_status()
+            texte = ""
+            for bloc in r.json()["content"]:
+                if bloc.get("type") == "text":
+                    texte += bloc.get("text", "")
+            texte = texte.strip().strip("```json").strip("```").strip()
+            return json.loads(texte)
+        except Exception as e:
+            if tentative == 2:
+                return {"description_activite": None, "chiffre_affaires": None,
+                        "ebitda": None, "actionnariat": None, "derniere_actualite": None}
+            time.sleep(5)
+    return {"description_activite": None, "chiffre_affaires": None,
+            "ebitda": None, "actionnariat": None, "derniere_actualite": None}
 
 def creer_excel(resultats):
     wb = Workbook()
@@ -191,6 +225,7 @@ if __name__ == "__main__":
             continue
 
         # Étape 2 : Vérification faux positif (sans web search)
+        time.sleep(3)  # pause anti-429 Anthropic
         print(f"  Vérification faux positif...")
         faux_positif, raison = verifier_faux_positif(nom, siren_res["nom_trouve"])
         res["faux_positif"] = faux_positif
