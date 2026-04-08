@@ -1,6 +1,7 @@
 import requests
 import time
 import pandas as pd
+import openpyxl
 
 INPUT_FILE = "entreprises.xlsx"
 OUTPUT_FILE = "entreprises_enrichies.xlsx"
@@ -32,7 +33,11 @@ def fetch_info(siret):
                 return {"Ville": f"Erreur: {str(e)[:40]}", "Département": "", "Code Postal": ""}
             time.sleep(5)
 
-df = pd.read_excel(INPUT_FILE, dtype={SIRET_COL: str}, sheet_name="A")
+wb = openpyxl.load_workbook(INPUT_FILE, read_only=True)
+print("Onglets disponibles :", wb.sheetnames)
+wb.close()
+
+df = pd.read_excel(INPUT_FILE, dtype={SIRET_COL: str}, sheet_name="Export CFNews")
 villes, depts, cps = [], [], []
 
 for i, row in df.iterrows():
