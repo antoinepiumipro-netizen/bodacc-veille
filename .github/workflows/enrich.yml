@@ -1,0 +1,26 @@
+name: Enrichissement SIRET
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Installer les dépendances
+        run: pip install requests pandas openpyxl
+
+      - name: Lancer le script
+        run: python enrich_siret.py
+
+      - name: Upload du fichier enrichi
+        uses: actions/upload-artifact@v4
+        with:
+          name: entreprises-enrichies
+          path: entreprises_enrichies.xlsx
