@@ -14,7 +14,7 @@ def fetch_info(siret):
         try:
             r = requests.get(BASE_URL, params={"q": siret, "per_page": 1}, timeout=15)
             if r.status_code == 429:
-                print(f"  Rate limit, attente 30s...")
+                print("  Rate limit, attente 30s...")
                 time.sleep(30)
                 continue
             if r.status_code == 200:
@@ -23,14 +23,45 @@ def fetch_info(siret):
                     siege = results[0].get("siege", {})
                     return {
                         "Ville": siege.get("libelle_commune", ""),
-                        "Département": siege.get("departement", ""),
+                        "Departement": siege.get("departement", ""),
                         "Code Postal": siege.get("code_postal", ""),
                     }
-                return {"Ville": "Non trouvé", "Département": "", "Code Postal": ""}
-            return {"Ville": f"Erreur {r.status_code}", "Département": "", "Code Postal": ""}
+                return {"Ville": "Non trouve", "Departement": "", "Code Postal": ""}
+            return {"Ville": "Erreur " + str(r.status_code), "Departement": "", "Code Postal": ""}
         except Exception as e:
             if tentative == 2:
-                return {"Ville": f"Erreur: {str(e)[:40]}", "Département": "", "Code Postal": ""}
+                return {"Ville": "Erreur: " + str(e)[:40], "Departement": "", "Code Postal": ""}
             time.sleep(5)
 
-wb = openpyxl.lo
+wb = openpyxl.load_workbook(INPUT_FILE, read_only=True)
+print("Onglets disponibles :", wb.sheetnames)
+wb.close()
+
+df = pd.read_excel(INPUT_FILE, dtype={SIRET_COL: str}, sheet_name="Export CFNews")
+print("Colonnes disponibles :", df.columns.tolist())
+villes, depts, cps = [], [], []
+
+for i, row in df.iterrows():
+    siret = str(row[SIRET_COL]).strip()
+    nom = str(row["Societe Cible ou Acteur"]) if "Societe Cible ou Acteur" in df.columns else str(row.iloc[0])
+
+    if not siret or siret in ("nan", "None", ""):
+        print(str(i+1) + "/" + str(len(df)) + " " + nom + " -> SIRET vide, ignore")
+        villes.append("")
+        depts.append("")
+        cps.append("")
+        continue
+
+    print(str(i+1) + "/" + str(len(df)) + " " + nom + " (" + siret + ")...")
+    info = fetch_info(siret)
+    villes.append(info["Ville"])
+    depts.append(info["Departement"])
+    cps.append(info["Code Postal"])
+    print("  -> " + info["Ville"] + " (" + info["Departement"] + ")")
+    time.sleep(0.5)
+
+df["Ville"] = villes
+df["Departement"] = depts
+df["Code Postal"] = cps
+df.to_excel(OUTPUT_FILE, index=False)
+print("Fichier genere : " + OUTPUT_FILE)
